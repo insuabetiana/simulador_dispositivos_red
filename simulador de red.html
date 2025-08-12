@@ -1,0 +1,982 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Simulador de Redes - VLAN / NAT / ARP / MAC / ICMP</title>
+<style>
+  :root{
+    --bg:#071428; --card:#0b1220; --soft:#e6eef8; --muted:#94a3b8; --accent:#5bd1ff;
+    --ok:#22c55e; --warn:#f59e0b; --err:#ef4444;
+  }
+  html,body{height:100%;margin:0;font-family:Inter,ui-sans-serif,system-ui,Segoe UI,Roboto,Arial;background:linear-gradient(180deg,#061223 0%, #07162a 100%);color:var(--soft)}
+  .app{display:flex;gap:12px;padding:12px;height:100%;box-sizing:border-box}
+  .panel{width:360px;background:linear-gradient(180deg, rgba(255,255,255,0.02), rgba(255,255,255,0.01));border-radius:12px;padding:16px;box-shadow:0 6px 20px rgba(2,6,23,0.6);overflow:auto}
+  .workspace{flex:1;position:relative;border-radius:12px;background:linear-gradient(180deg, rgba(255,255,255,0.01), rgba(255,255,255,0.00));display:flex;flex-direction:column}
+  .controls{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px}
+  button{background:transparent;border:1px solid rgba(255,255,255,0.06);padding:8px 10px;border-radius:8px;color:var(--soft);cursor:pointer}
+  button.primary{background:linear-gradient(90deg,var(--accent),#7be6ff);color:#002032;border:none}
+  .toolbox{display:flex;gap:8px;margin-bottom:12px}
+  .device-btn{display:flex;gap:8px;align-items:center;padding:8px;border-radius:8px;border:1px solid rgba(255,255,255,0.03);cursor:grab}
+  .device-icon{width:36px;height:36px;border-radius:6px;display:grid;place-items:center;background:rgba(255,255,255,0.03)}
+  #boardWrap{flex:1;position:relative;overflow:hidden;border-radius:12px}
+  #svgLayer{position:absolute;left:0;top:0;width:100%;height:100%;pointer-events:none;z-index:0}
+  #board{position:absolute;left:0;top:0;width:2000px;height:1200px;overflow:auto;transform-origin:0 0;z-index:1}
+  .node{position:absolute;min-width:140px;padding:10px;border-radius:10px;background:linear-gradient(180deg, rgba(255,255,255,0.02), rgba(255,255,255,0.01));border:1px solid rgba(255,255,255,0.04);cursor:grab;box-shadow:0 8px 20px rgba(2,6,23,0.6)}
+  .title{font-weight:700}
+  .type{font-size:12px;color:var(--muted)}
+  .ip{font-size:12px;color:var(--muted);margin-top:6px}
+  .node .actions{display:flex;gap:6px;margin-top:8px}
+  .smallBtn{padding:6px 8px;border-radius:6px;border:1px solid rgba(255,255,255,0.03);background:transparent;font-size:13px;cursor:pointer}
+  .log{height:140px;overflow:auto;background:rgba(255,255,255,0.01);border-radius:8px;padding:8px;margin-top:8px;font-size:13px;color:var(--muted)}
+  table{width:100%;border-collapse:collapse;margin-top:6px}
+  td,th{padding:6px;border-top:1px dashed rgba(255,255,255,0.02);font-size:13px;color:var(--muted)}
+  h3{margin:8px 0 6px 0}
+  .modal{position:fixed;left:0;top:0;width:100%;height:100%;display:none;align-items:center;justify-content:center;background:rgba(0,0,0,0.45);z-index:50}
+  .modal.show{display:flex}
+  .card{background:var(--card);padding:16px;border-radius:12px;min-width:320px;max-width:760px;box-shadow:0 10px 30px rgba(2,6,23,0.6)}
+  label{display:block;font-size:13px;color:var(--muted);margin-top:8px}
+  input[type=text], select{width:100%;padding:8px;border-radius:8px;border:1px solid rgba(255,255,255,0.04);background:transparent;color:var(--soft)}
+  .tablebox{max-height:160px;overflow:auto;background:rgba(255,255,255,0.01);border-radius:8px;padding:8px;margin-top:6px}
+  .badge{display:inline-block;padding:4px 8px;border-radius:999px;background:rgba(255,255,255,0.03);font-size:12px}
+  .muted{color:var(--muted)}
+  .status-up{color:var(--ok)} .status-down{color:var(--err)}
+  .nat-table td, .nat-table th{font-size:12px}
+  .vlan-tag{display:inline-block;padding:2px 6px;border-radius:4px;background:rgba(91,209,255,0.12);font-weight:700;margin-left:6px;color:var(--accent)}
+</style>
+</head>
+<body>
+<div class="app">
+  <!-- PANEL IZQUIERDO -->
+  <div class="panel" id="leftPanel">
+    <div style="display:flex;justify-content:space-between;align-items:center">
+      <div>
+        <h2>Simulador de Redes</h2>
+        <small class="muted">VLAN · NAT · ARP · MAC · ICMP</small>
+      </div>
+      <div><small id="simTime">00:00</small></div>
+    </div>
+
+    <div class="controls">
+      <button id="btnAdd" class="primary">Añadir</button>
+      <button id="btnConnect">Conectar</button>
+      <button id="btnMove">Mover</button>
+      <button id="btnPing">Ping (ICMP)</button>
+      <button id="btnSim">Simular envío</button>
+      <button id="btnRandom">Escenario aleatorio</button>
+      <button id="btnReset">Reiniciar</button>
+    </div>
+
+    <div class="toolbox" id="toolbox">
+      <div class="device-btn" data-type="PC" draggable="true"><div class="device-icon">💻</div><div><div class="title">PC</div><small class="muted">Cliente</small></div></div>
+      <div class="device-btn" data-type="Router" draggable="true"><div class="device-icon">  router</div><div><div class="title">Router</div><small class="muted">Capa 3</small></div></div>
+      <div class="device-btn" data-type="Switch" draggable="true"><div class="device-icon">🔀</div><div><div class="title">Switch</div><small class="muted">Capa 2 (VLAN)</small></div></div>
+      <div class="device-btn" data-type="Server" draggable="true"><div class="device-icon">🗄️</div><div><div class="title">Server</div><small class="muted">Servidor</small></div></div>
+    </div>
+
+    <h3>Dispositivos</h3>
+    <div class="tablebox"><table id="devicesTable"><thead><tr><th>Nombre</th><th>IP</th><th>MAC</th></tr></thead><tbody></tbody></table></div>
+
+    <h3>Enlaces</h3>
+    <div class="tablebox"><table id="linksTable"><thead><tr><th>Link</th><th>Estado</th></tr></thead><tbody></tbody></table></div>
+
+    <h3>ARP (Routers)</h3>
+    <div class="tablebox"><table id="arpTable"><thead><tr><th>Router</th><th>IP</th><th>MAC</th></tr></thead><tbody></tbody></table></div>
+
+    <h3>MAC tables (Switches)</h3>
+    <div class="tablebox"><table id="macTable"><thead><tr><th>Switch</th><th>MAC</th><th>Puerto</th><th>VLAN</th></tr></thead><tbody></tbody></table></div>
+
+    <h3>NAT (Routers)</h3>
+    <div class="tablebox">
+      <div style="display:flex;gap:8px;justify-content:space-between">
+        <div><small class="muted">Configura NAT en routers con interfaz "inside/outside".</small></div>
+        <button id="btnShowNat" class="smallBtn">Ver tablas NAT</button>
+      </div>
+      <table class="nat-table" id="natTable"><thead><tr><th>Router</th><th>Inside</th><th>Outside</th></tr></thead><tbody></tbody></table>
+    </div>
+
+    <h3>Registro / Log</h3>
+    <div class="log" id="logArea"></div>
+  </div>
+
+  <!-- AREA DE TRABAJO -->
+  <div class="workspace">
+    <div id="boardWrap">
+      <svg id="svgLayer"></svg>
+      <div id="board"></div>
+    </div>
+  </div>
+</div>
+
+<!-- MODAL EDICIÓN DISPOSITIVO -->
+<div class="modal" id="modalEdit">
+  <div class="card">
+    <h3 id="modalTitle">Editar dispositivo</h3>
+    <label>Nombre</label><input id="nodeName" type="text"/>
+    <label>Tipo</label>
+    <select id="nodeType"><option>PC</option><option>Router</option><option>Switch</option><option>Server</option></select>
+    <label>IP</label><input id="nodeIP" type="text" placeholder="e.g., 192.168.1.10"/>
+    <label>Máscara (CIDR)</label><input id="nodeMask" type="text" placeholder="24"/>
+    <label>Gateway</label><input id="nodeGW" type="text" placeholder="e.g., 192.168.1.1"/>
+    <div id="routerNatConfig" style="display:none">
+      <h4>Configuración NAT (Router)</h4>
+      <label>Interfaz Inside (IP)</label><input id="natInside" type="text" placeholder="e.g., 192.168.1.1"/>
+      <label>Interfaz Outside (IP)</label><input id="natOutside" type="text" placeholder="e.g., 200.0.0.2"/>
+      <label>Habilitar PAT (dynamic)</label>
+      <select id="natMode"><option value="off">Off</option><option value="pat">PAT</option></select>
+    </div>
+
+    <div id="switchPorts" style="display:none">
+      <h4>Puertos Switch</h4>
+      <div id="portsList" style="max-height:200px;overflow:auto"></div>
+      <small class="muted">Asignar VLAN por puerto (p.ej. 10,20). El puerto corresponde a un enlace entre switch y otro dispositivo.</small>
+    </div>
+
+    <div style="display:flex;gap:8px;margin-top:12px;justify-content:flex-end">
+      <button id="delNode" class="smallBtn" style="background:rgba(255,50,50,0.06);border-color:rgba(255,50,50,0.12)">Eliminar</button>
+      <button id="saveNode" class="smallBtn">Guardar</button>
+    </div>
+  </div>
+</div>
+
+<!-- MODAL NAT TABLE -->
+<div class="modal" id="modalNat">
+  <div class="card" style="min-width:420px">
+    <h3>Tabla de traducciones NAT</h3>
+    <div class="tablebox"><table id="natTransTable"><thead><tr><th>Router</th><th>Inside IP:Port</th><th>Outside IP:Port</th><th>Tipo</th></tr></thead><tbody></tbody></table></div>
+    <div style="display:flex;justify-content:flex-end;margin-top:8px"><button id="closeNat" class="smallBtn">Cerrar</button></div>
+  </div>
+</div>
+
+<script>
+/* ===========================
+   Simulador: datos y utilidades
+   =========================== */
+
+const $ = s => document.querySelector(s);
+const $$ = s => Array.from(document.querySelectorAll(s));
+const board = $('#board');
+const svg = $('#svgLayer');
+const devicesTableBody = $('#devicesTable tbody');
+const linksTableBody = $('#linksTable tbody');
+const logArea = $('#logArea');
+const arpTableBody = $('#arpTable tbody');
+const macTableBody = $('#macTable tbody');
+const natTableBody = $('#natTable tbody');
+const natTransTableBody = $('#natTransTable tbody');
+
+const state = {
+  nodes: {},    // id -> node {id,type,name,x,y,ip,mask,gw,mac,el,ports(for switch)}
+  links: {},    // id -> {id,a,b,enabled}
+  nextNodeId:1, nextLinkId:1,
+  mode:'add', connectFrom:null, animating:false,
+  natTranslations: {} // routerId -> [{insideIP,insidePort,outIP,outPort,type}]
+};
+
+function log(msg, level='info'){
+  const p = document.createElement('div');
+  p.innerHTML = `<strong>[${new Date().toLocaleTimeString()}]</strong> ${msg}`;
+  if(level==='err') p.style.color='var(--err)';
+  if(level==='warn') p.style.color='var(--warn)';
+  logArea.prepend(p);
+}
+
+/* MAC generator */
+function genMAC(){
+  const hex = ()=>Math.floor(Math.random()*256).toString(16).padStart(2,'0');
+  return `02:${hex()}:${hex()}:${hex()}:${hex()}:${hex()}`.toLowerCase();
+}
+
+/* ---------------------------
+   Crear y renderizar nodos
+   --------------------------- */
+function createNode(type='PC', x=100, y=100, name=null){
+  const id = 'n'+(state.nextNodeId++);
+  const node = { id, type, name: name || `${type}-${id}`, x, y, ip:'', mask:'', gw:'', mac: genMAC(), el:null, ports: {} };
+  // Switch additional: ports map linkId->portNum and vlan per port
+  if(type==='Switch'){ node.ports = {}; node.nextPort=1; node.macTable = {}; /* mac -> {port,vlan,ts} */ }
+  // Router additional: arp cache and nat config
+  if(type==='Router'){ node.arp = {}; node.nat = {inside:null,outside:null,mode:'off'}; state.natTranslations[id]=[]; }
+  state.nodes[id] = node;
+  renderNode(node);
+  updateTables();
+  log(`Creado ${node.name} (${node.type}) MAC ${node.mac}`);
+  return node;
+}
+
+function renderNode(node){
+  if(node.el) node.el.remove();
+  const el = document.createElement('div');
+  el.className = 'node';
+  el.style.left = node.x+'px';
+  el.style.top = node.y+'px';
+  el.dataset.id = node.id;
+  el.innerHTML = `
+    <div style="display:flex;justify-content:space-between;align-items:center">
+      <div>
+        <div class="title">${node.name} ${node.type==='Switch'?'<span class="vlan-tag">SW</span>':''}</div>
+        <div class="type">${node.type}</div>
+      </div>
+      <div style="text-align:right"><small class="muted">${node.mac}</small></div>
+    </div>
+    <div class="ip">${node.ip ? node.ip + (node.mask?'/'+node.mask:'') : '<span class="muted">Sin IP</span>'}</div>
+    <div class="actions">
+      <button class="smallBtn cfgBtn">Config</button>
+      <button class="smallBtn downBtn">Toggle Link</button>
+    </div>
+  `;
+  board.appendChild(el);
+  node.el = el;
+
+  // Dragging
+  let dragging=false, ox=0, oy=0;
+  el.addEventListener('mousedown', ev=>{
+    if(state.mode !== 'move' && state.mode !== 'add') return;
+    dragging=true; el.style.cursor='grabbing';
+    const rect = el.getBoundingClientRect(); const br = board.getBoundingClientRect();
+    ox = ev.clientX - rect.left; oy = ev.clientY - rect.top;
+    ev.stopPropagation();
+  });
+  window.addEventListener('mousemove', ev=>{
+    if(!dragging) return;
+    const br = board.getBoundingClientRect();
+    let nx = ev.clientX - br.left - ox; let ny = ev.clientY - br.top - oy;
+    nx = Math.max(10, Math.min(1800, nx)); ny = Math.max(10, Math.min(1000, ny));
+    node.x = nx; node.y = ny; el.style.left = nx+'px'; el.style.top = ny+'px';
+    renderLinks();
+  });
+  window.addEventListener('mouseup', ()=>{ if(dragging){ dragging=false; el.style.cursor='grab'; } });
+
+  // Buttons
+  el.querySelector('.cfgBtn').addEventListener('click', ()=>openEditModal(node.id));
+  el.querySelector('.downBtn').addEventListener('click', ()=>{
+    // toggle all links attached to this node
+    const affected = Object.values(state.links).filter(l=>l.a===node.id||l.b===node.id);
+    affected.forEach(l=>l.enabled = !l.enabled);
+    renderLinks(); updateTables(); log(`Toggled enlaces de ${node.name}`);
+  });
+
+  // Click for connect mode
+  el.addEventListener('click', (ev)=>{
+    ev.stopPropagation();
+    if(state.mode==='connect'){
+      if(!state.connectFrom){ state.connectFrom = node.id; highlightNode(node.id,true); log(`Seleccionado ${node.name} como origen`); }
+      else if(state.connectFrom === node.id){ highlightNode(node.id,false); state.connectFrom=null; }
+      else { createLink(state.connectFrom, node.id); highlightNode(state.connectFrom,false); state.connectFrom=null; }
+    }
+  });
+}
+
+/* ---------------------------
+   Links: crear y renderizar
+   --------------------------- */
+function createLink(a,b){
+  // prevent duplicates
+  for(const l of Object.values(state.links)) if((l.a===a&&l.b===b)||(l.a===b&&l.b===a)){ log('Link ya existe','warn'); return; }
+  const id = 'l'+(state.nextLinkId++);
+  state.links[id] = {id,a,b,enabled:true,el:null};
+  // If one end is switch, create a port entry
+  [a,b].forEach(nodeId=>{
+    const n = state.nodes[nodeId];
+    if(n && n.type==='Switch'){
+      const port = n.nextPort || 1; n.nextPort = (port+1); n.ports[id] = {port, vlan:1}; // default VLAN 1
+    }
+  });
+  renderLinks(); updateTables(); log(`Link creado: ${state.nodes[a].name} ↔ ${state.nodes[b].name}`);
+  return state.links[id];
+}
+
+function getCenter(el){
+  const r = el.getBoundingClientRect(), rb = board.getBoundingClientRect();
+  return { x: (r.left - rb.left) + r.width/2, y: (r.top - rb.top) + r.height/2 };
+}
+
+function renderLinks(){
+  svg.innerHTML='';
+  for(const l of Object.values(state.links)){
+    const na = state.nodes[l.a], nb = state.nodes[l.b];
+    if(!na || !nb) continue;
+    const ca = getCenter(na.el), cb = getCenter(nb.el);
+    const line = document.createElementNS('http://www.w3.org/2000/svg','line');
+    line.setAttribute('x1',ca.x); line.setAttribute('y1',ca.y);
+    line.setAttribute('x2',cb.x); line.setAttribute('y2',cb.y);
+    line.setAttribute('stroke-width', 4);
+    line.setAttribute('stroke-linecap','round');
+    line.setAttribute('stroke', l.enabled? 'rgba(91,209,255,0.65)':'rgba(255,255,255,0.06)');
+    svg.appendChild(line);
+    const mx=(ca.x+cb.x)/2, my=(ca.y+cb.y)/2;
+    const circ = document.createElementNS('http://www.w3.org/2000/svg','circle');
+    circ.setAttribute('cx',mx); circ.setAttribute('cy',my); circ.setAttribute('r',6);
+    circ.setAttribute('fill', l.enabled? 'var(--ok)':'var(--err)');
+    svg.appendChild(circ);
+  }
+}
+
+/* ---------------------------
+   Tablas: dispositivos, links, ARP, MAC, NAT
+   --------------------------- */
+function updateTables(){
+  // devices
+  devicesTableBody.innerHTML='';
+  for(const n of Object.values(state.nodes)){
+    const tr = document.createElement('tr');
+    tr.innerHTML = `<td>${n.name}</td><td>${n.ip || '<span class="muted">---</span>'}</td><td><small class="muted">${n.mac}</small></td>`;
+    devicesTableBody.appendChild(tr);
+  }
+  // links
+  linksTableBody.innerHTML='';
+  for(const l of Object.values(state.links)){
+    const a = state.nodes[l.a], b = state.nodes[l.b];
+    const tr = document.createElement('tr');
+    tr.innerHTML = `<td>${a.name} ↔ ${b.name}</td><td>${l.enabled?'<span class="status-up">Up</span>':'<span class="status-down">Down</span>'}</td>`;
+    linksTableBody.appendChild(tr);
+  }
+  // ARP (routers)
+  arpTableBody.innerHTML='';
+  for(const r of Object.values(state.nodes).filter(n=>n.type==='Router')){
+    for(const [ip,mac] of Object.entries(r.arp||{})){
+      const tr = document.createElement('tr');
+      tr.innerHTML = `<td>${r.name}</td><td>${ip}</td><td>${mac}</td>`;
+      arpTableBody.appendChild(tr);
+    }
+  }
+  // MAC tables
+  macTableBody.innerHTML='';
+  for(const sw of Object.values(state.nodes).filter(n=>n.type==='Switch')){
+    for(const [mac,entry] of Object.entries(sw.macTable||{})){
+      const tr = document.createElement('tr');
+      tr.innerHTML = `<td>${sw.name}</td><td>${mac}</td><td>${entry.port}</td><td>${entry.vlan}</td>`;
+      macTableBody.appendChild(tr);
+    }
+  }
+  // NAT config summary
+  natTableBody.innerHTML='';
+  for(const r of Object.values(state.nodes).filter(n=>n.type==='Router')){
+    const tr = document.createElement('tr');
+    const inside = r.nat && r.nat.inside ? r.nat.inside : '<span class="muted">-</span>';
+    const outside = r.nat && r.nat.outside ? r.nat.outside : '<span class="muted">-</span>';
+    tr.innerHTML = `<td>${r.name}</td><td>${inside}</td><td>${outside}</td>`;
+    natTableBody.appendChild(tr);
+  }
+}
+
+/* ---------------------------
+   Modal edición (switch ports, router NAT)
+   --------------------------- */
+const modal = $('#modalEdit');
+let editingNodeId = null;
+function openEditModal(id){
+  editingNodeId = id;
+  const n = state.nodes[id];
+  $('#modalTitle').textContent = `Editar ${n.name}`;
+  $('#nodeName').value = n.name;
+  $('#nodeType').value = n.type;
+  $('#nodeIP').value = n.ip;
+  $('#nodeMask').value = n.mask;
+  $('#nodeGW').value = n.gw;
+  // NAT config UI
+  if(n.type==='Router'){ $('#routerNatConfig').style.display='block'; $('#switchPorts').style.display='none';
+    $('#natInside').value = n.nat.inside||''; $('#natOutside').value = n.nat.outside||''; $('#natMode').value = n.nat.mode||'off';
+  } else if(n.type==='Switch'){ $('#routerNatConfig').style.display='none'; $('#switchPorts').style.display='block';
+    renderSwitchPorts(n);
+  } else { $('#routerNatConfig').style.display='none'; $('#switchPorts').style.display='none'; }
+  modal.classList.add('show');
+}
+
+function renderSwitchPorts(sw){
+  const container = $('#portsList'); container.innerHTML='';
+  // For each link attached to switch, show port and VLAN
+  for(const [lid, portInfo] of Object.entries(sw.ports || {})){
+    const l = state.links[lid];
+    const other = l ? (l.a===sw.id?state.nodes[l.b]:state.nodes[l.a]) : null;
+    const line = document.createElement('div');
+    line.style.display='flex'; line.style.alignItems='center'; line.style.justifyContent='space-between'; line.style.gap='8px'; line.style.marginBottom='6px';
+    const left = document.createElement('div'); left.innerHTML = `<strong>P${portInfo.port}</strong> ↔ <span class="muted">${other?other.name:'-'}</span>`;
+    const right = document.createElement('div');
+    const sel = document.createElement('input'); sel.value = portInfo.vlan || 1; sel.type='text'; sel.style.width='70px';
+    sel.addEventListener('change', ()=>{ portInfo.vlan = sel.value; log(`VLAN del puerto ${sw.name} P${portInfo.port} -> ${sel.value}`); updateTables(); });
+    right.appendChild(sel);
+    line.appendChild(left); line.appendChild(right); container.appendChild(line);
+  }
+}
+
+$('#saveNode').addEventListener('click', ()=>{
+  const n = state.nodes[editingNodeId];
+  n.name = $('#nodeName').value || n.name;
+  n.type = $('#nodeType').value;
+  n.ip = $('#nodeIP').value.trim();
+  n.mask = $('#nodeMask').value.trim();
+  n.gw = $('#nodeGW').value.trim();
+  if(n.type==='Router'){
+    n.nat.inside = $('#natInside').value.trim() || null;
+    n.nat.outside = $('#natOutside').value.trim() || null;
+    n.nat.mode = $('#natMode').value;
+    state.natTranslations[n.id] = state.natTranslations[n.id] || [];
+  }
+  // Re-render
+  renderNode(n);
+  renderLinks();
+  updateTables();
+  modal.classList.remove('show');
+  log(`Configuración guardada: ${n.name} (${n.ip || 'sin IP'})`);
+});
+$('#delNode').addEventListener('click', ()=>{
+  if(!confirm('Eliminar dispositivo y sus enlaces?')) return;
+  // remove node & links
+  const id = editingNodeId;
+  delete state.nodes[id];
+  for(const lid of Object.keys(state.links)){ if(state.links[lid].a===id || state.links[lid].b===id) delete state.links[lid]; }
+  $(`[data-id="${id}"]`)?.remove();
+  modal.classList.remove('show');
+  renderLinks(); updateTables(); log('Dispositivo eliminado');
+});
+modal.addEventListener('click', (e)=>{ if(e.target===modal) modal.classList.remove('show'); });
+
+/* ---------------------------
+   Modo y toolbox dragging
+   --------------------------- */
+let draggedType = null;
+$$('.device-btn').forEach(btn=>{
+  btn.addEventListener('dragstart', ev=> draggedType = btn.dataset.type );
+});
+$('#board').addEventListener('dragover', ev=> ev.preventDefault());
+$('#board').addEventListener('drop', ev=>{
+  ev.preventDefault();
+  const br = board.getBoundingClientRect();
+  const x = ev.clientX - br.left, y = ev.clientY - br.top;
+  createNode(draggedType, x-60, y-30);
+  draggedType = null;
+});
+
+function setMode(m){
+  state.mode = m;
+  ['btnAdd','btnConnect','btnMove'].forEach(id=> $(`#${id}`).classList.remove('primary'));
+  if(m==='add') $('#btnAdd').classList.add('primary');
+  if(m==='connect') $('#btnConnect').classList.add('primary');
+  if(m==='move') $('#btnMove').classList.add('primary');
+  log('Modo: ' + m);
+}
+$('#btnAdd').addEventListener('click', ()=>setMode('add'));
+$('#btnConnect').addEventListener('click', ()=>setMode('connect'));
+$('#btnMove').addEventListener('click', ()=>setMode('move'));
+
+/* board click to add node when mode=add */
+board.addEventListener('click', ev=>{
+  if(state.mode!=='add') return;
+  const br = board.getBoundingClientRect();
+  createNode('PC', ev.clientX - br.left - 60, ev.clientY - br.top - 30);
+});
+
+/* connect by clicking: handled in node render */
+
+/* ---------------------------
+   Reset / Random scenario
+   --------------------------- */
+function resetBoard(){
+  if(!confirm('Reiniciar tablero y eliminar todo?')) return;
+  for(const id of Object.keys(state.nodes)){ state.nodes[id].el?.remove(); delete state.nodes[id]; }
+  state.links = {}; state.nextNodeId = 1; state.nextLinkId = 1; state.natTranslations={};
+  svg.innerHTML=''; updateTables(); log('Tablero reiniciado');
+}
+$('#btnReset').addEventListener('click', resetBoard);
+
+function createRandomScenario(){
+  resetBoard();
+  const pc1 = createNode('PC',60,60,'PC-A'); pc1.ip='192.168.10.10'; pc1.mask='24'; pc1.gw='192.168.10.1';
+  const sw = createNode('Switch',300,90,'Switch-1');
+  const router = createNode('Router',520,120,'Router-1'); router.ip='10.0.0.1'; router.mask='24';
+  const pc2 = createNode('PC',760,80,'PC-B'); pc2.ip='10.0.0.10'; pc2.mask='24'; pc2.gw='10.0.0.1';
+  const srv = createNode('Server',760,240,'Server-DB'); srv.ip='10.0.0.20'; srv.mask='24'; srv.gw='10.0.0.1';
+  // links
+  createLink(pc1.id, sw.id);
+  createLink(sw.id, router.id);
+  createLink(router.id, pc2.id);
+  createLink(router.id, srv.id);
+  // NAT: configure router NAT for example
+  router.nat.inside = '10.0.0.1'; router.nat.outside = '200.0.0.2'; router.nat.mode='pat';
+  updateTables();
+  // random fault
+  const r = Math.random();
+  if(r < 0.33){
+    const lk = Object.values(state.links)[Math.floor(Math.random()*Object.values(state.links).length)];
+    if(lk) { lk.enabled=false; log(`Fallo intencional: enlace ${state.nodes[lk.a].name}↔${state.nodes[lk.b].name} abajo`,'warn'); }
+  } else if(r < 0.66){
+    pc1.ip = '192.168.99.20'; log('Fallo intencional: IP mal configurada en PC-A','warn');
+  } else {
+    pc2.gw = '192.168.10.1'; log('Fallo intencional: Gateway incorrecto en PC-B','warn');
+  }
+  for(const n of Object.values(state.nodes)) renderNode(n);
+  renderLinks(); updateTables();
+}
+$('#btnRandom').addEventListener('click', createRandomScenario);
+
+/* ---------------------------
+   Networking helpers: CIDR, sameSubnet, graph
+   --------------------------- */
+function cidrToMask(cidr){
+  const m = parseInt(cidr); if(isNaN(m)||m<0||m>32) return null;
+  const bits = '1'.repeat(m).padEnd(32,'0');
+  return [bits.slice(0,8),bits.slice(8,16),bits.slice(16,24),bits.slice(24,32)].map(b=>parseInt(b,2)).join('.');
+}
+function ipToNum(ip){ return ip.split('.').reduce((a,b)=>a*256+parseInt(b||0),0); }
+function sameSubnet(ip1,m1,ip2,m2){
+  if(!ip1||!ip2||!m1) return false;
+  const mask = cidrToMask(m1); if(!mask) return false;
+  return (ipToNum(ip1) & ipToNum(mask)) === (ipToNum(ip2) & ipToNum(mask));
+}
+
+/* Build graph including only enabled links */
+function buildGraph(){
+  const g={}; for(const id of Object.keys(state.nodes)) g[id]=[];
+  for(const l of Object.values(state.links)){ if(!l.enabled) continue; g[l.a].push(l.b); g[l.b].push(l.a); }
+  return g;
+}
+
+/* BFS shortest path of node ids (ignores link VLAN logic) */
+function findPath(a,b){
+  const g=buildGraph(); const q=[a]; const prev={}; prev[a]=null;
+  while(q.length){
+    const cur=q.shift(); if(cur===b) break;
+    for(const nb of g[cur]||[]){ if(!(nb in prev)){ prev[nb]=cur; q.push(nb); } }
+  }
+  if(!(b in prev)) return null;
+  const path=[]; let cur=b; while(cur){ path.unshift(cur); cur=prev[cur]; }
+  return path;
+}
+
+/* ---------------------------
+   SWITCH: frame forwarding + MAC learning + VLAN
+   --------------------------- */
+/*
+ Frame structure: {srcMAC,dstMAC,srcIP,dstIP,ethType:'ip'|'arp'|'icmp',payload, vlan}
+ When a frame reaches a switch via a port (linkId), the switch:
+  - learns srcMAC -> port & vlan
+  - if dstMAC in table and vlan matches => forward to that port only
+  - else => flood to all ports in same VLAN except incoming
+*/
+function switchReceiveFrame(sw, incomingLinkId, frame){
+  // learn source MAC
+  sw.macTable = sw.macTable || {};
+  const portInfo = sw.ports[incomingLinkId];
+  const vlan = frame.vlan || (portInfo && portInfo.vlan) || 1;
+  sw.macTable[frame.srcMAC] = {port: portInfo ? portInfo.port : '?', vlan, ts: Date.now()};
+  updateTables();
+
+  // find destination in table
+  const entry = sw.macTable[frame.dstMAC];
+  if(entry && entry.vlan == vlan){
+    // forward only to that port if link exists
+    const targetLinkId = Object.keys(sw.ports).find(lid => sw.ports[lid].port === entry.port);
+    if(targetLinkId && targetLinkId !== incomingLinkId){
+      const l = state.links[targetLinkId];
+      if(l && l.enabled){
+        // deliver to other end
+        const otherNodeId = l.a===sw.id?l.b:l.a;
+        log(`${sw.name} reenvía trama a ${state.nodes[otherNodeId].name} (unicast) VLAN ${vlan}`);
+        deliverFrameToNode(otherNodeId, targetLinkId, frame);
+      } else { log(`${sw.name}: enlace destino caído`, 'warn'); }
+      return;
+    } else {
+      // port not found or same port - drop
+      return;
+    }
+  } else {
+    // Flood to all ports in same VLAN except incoming
+    for(const [lid,pinfo] of Object.entries(sw.ports)){
+      if(lid === incomingLinkId) continue;
+      const pVlan = pinfo.vlan || 1;
+      if(String(pVlan) !== String(vlan)) continue;
+      const l = state.links[lid];
+      if(!l || !l.enabled) continue;
+      const otherNodeId = l.a===sw.id?l.b:l.a;
+      // deliver
+      deliverFrameToNode(otherNodeId, lid, frame);
+    }
+    log(`${sw.name} hace flood en VLAN ${vlan} (sin entrada en MAC table)`);
+  }
+}
+
+/* ---------------------------
+   ROUTER: ARP learning + simple NAT
+   --------------------------- */
+function routerReceiveFrame(r, incomingLinkId, frame){
+  // If ARP request targeted to an IP the router owns -> respond
+  if(frame.ethType==='arp'){
+    if(frame.payload && frame.payload.op === 'request'){
+      const targetIP = frame.payload.targetIP;
+      if(r.ip === targetIP){
+        // craft ARP reply
+        const reply = { srcMAC: r.mac, dstMAC: frame.srcMAC, ethType:'arp', vlan:frame.vlan,
+                        payload: {op:'reply', senderIP: r.ip, senderMAC: r.mac, targetIP: frame.payload.senderIP, targetMAC: frame.srcMAC } };
+        // send back to requester via same link
+        deliverFrameToNode(state.links[incomingLinkId].a===r.id?state.links[incomingLinkId].b:state.links[incomingLinkId].a, incomingLinkId, reply);
+        // learn ARP
+        r.arp[frame.payload.senderIP] = frame.srcMAC; updateTables();
+        return;
+      }
+    } else if(frame.payload && frame.payload.op==='reply'){
+      // ARP reply - learn mapping
+      r.arp[frame.payload.senderIP] = frame.payload.senderMAC; updateTables();
+      return;
+    }
+  }
+
+  // For IP frames: update ARP if source present
+  if(frame.ethType==='ip' || frame.ethType==='icmp'){
+    // learn: map srcIP->srcMAC if exists
+    if(frame.srcIP) { r.arp[frame.srcIP] = frame.srcMAC; updateTables(); }
+    // NAT handling if enabled and frame is leaving inside->outside or viceversa
+    // We'll assume: if frame.srcIP is in router's inside subnet and destination outside, apply NAT (PAT) if configured.
+    if(r.nat && r.nat.mode === 'pat' && r.nat.inside && r.nat.outside){
+      // Determine if frame is from inside (srcIP in inside network) — naive check by prefix equality
+      const inside = String(frame.srcIP).startsWith(r.nat.inside.split('.').slice(0,3).join('.')); // simple /24 heuristic
+      const outside = String(frame.dstIP).startsWith(r.nat.outside.split('.').slice(0,3).join('.'));
+      if(inside && !outside){
+        // create PAT mapping: insideIP:srcPort -> outsideIP:port
+        const insideIP = frame.srcIP; const insidePort = frame.srcPort || Math.floor(1024+Math.random()*40000);
+        const outIP = r.nat.outside; const outPort = 10000 + Math.floor(Math.random()*50000);
+        state.natTranslations[r.id] = state.natTranslations[r.id] || [];
+        state.natTranslations[r.id].push({insideIP,insidePort,outIP,outPort,type:'PAT',ts:Date.now()});
+        updateNatTransTable();
+        // modify frame addresses for onward delivery: replace srcIP/srcPort with outIP/outPort and keep inner info saved
+        frame._orig = {srcIP:frame.srcIP, srcPort:frame.srcPort};
+        frame.srcIP = outIP; frame.srcPort = outPort;
+        frame.srcMAC = r.mac; // router rewrites MAC at L2
+      }
+    }
+  }
+}
+
+/* ---------------------------
+   Deliver frame to node (called when link sends a frame)
+   - This function simulates LL delivery and then lets the node type decide
+*/
+function deliverFrameToNode(nodeId, incomingLinkId, frame){
+  const node = state.nodes[nodeId];
+  if(!node) return;
+  // final host: if MAC matches or broadcast, act
+  // Determine dst MAC: if frame.dstMAC is broadcast or matches node.mac => accept
+  const isBroadcast = frame.dstMAC==='ff:ff:ff:ff:ff:ff';
+  if(frame.dstMAC && !isBroadcast && frame.dstMAC !== node.mac){
+    // Not for this host at L2 => ignore
+    return;
+  }
+  // Node behavior:
+  if(node.type==='Switch'){
+    // Switch receives frame on port incomingLinkId -> perform learning and forwarding
+    switchReceiveFrame(node, incomingLinkId, frame);
+  } else if(node.type==='Router'){
+    routerReceiveFrame(node, incomingLinkId, frame);
+    // For IP/ICMP destined to this router IP -> handle
+    if((frame.ethType==='ip' || frame.ethType==='icmp') && frame.dstIP === node.ip){
+      if(frame.ethType==='icmp' && frame.payload && frame.payload.type==='echo'){
+        // respond with echo-reply after small delay
+        setTimeout(()=>{
+          const reply = { srcMAC: node.mac, dstMAC: frame.srcMAC, ethType:'icmp', vlan:frame.vlan,
+                          srcIP: node.ip, dstIP: frame.srcIP, payload:{type:'echo-reply',id:frame.payload.id, seq:frame.payload.seq} };
+          // deliver back along same link
+          deliverFrameToNode(state.links[incomingLinkId].a===node.id?state.links[incomingLinkId].b:state.links[incomingLinkId].a, incomingLinkId, reply);
+        }, 50 + Math.random()*100);
+      }
+    }
+  } else {
+    // Host (PC/Server)
+    // Accept ARP requests? If ARP request for our IP -> reply
+    if(frame.ethType==='arp'){
+      if(frame.payload && frame.payload.op==='request' && frame.payload.targetIP === node.ip){
+        // craft arp reply
+        const reply = { srcMAC: node.mac, dstMAC: frame.srcMAC, ethType:'arp', vlan:frame.vlan,
+                        payload:{op:'reply', senderIP: node.ip, senderMAC: node.mac, targetIP: frame.payload.senderIP, targetMAC: frame.srcMAC} };
+        deliverFrameToNode(state.links[incomingLinkId].a===node.id?state.links[incomingLinkId].b:state.links[incomingLinkId].a, incomingLinkId, reply);
+        return;
+      } else if(frame.payload && frame.payload.op==='reply'){
+        // ARP reply: if host, store ARP cache (we keep it in node.arp)
+        node.arp = node.arp || {};
+        node.arp[frame.payload.senderIP] = frame.payload.senderMAC;
+        updateTables();
+        return;
+      }
+    }
+    if(frame.ethType==='icmp' && frame.payload && frame.payload.type==='echo'){
+      // Received ping to this host -> reply
+      setTimeout(()=>{
+        const reply = { srcMAC: node.mac, dstMAC: frame.srcMAC, ethType:'icmp', vlan:frame.vlan,
+                        srcIP: node.ip, dstIP: frame.srcIP, payload:{type:'echo-reply', id:frame.payload.id, seq:frame.payload.seq} };
+        deliverFrameToNode(state.links[incomingLinkId].a===node.id?state.links[incomingLinkId].b:state.links[incomingLinkId].a, incomingLinkId, reply);
+      }, 20 + Math.random()*60);
+      return;
+    }
+    // For normal IP frames, hosts are endpoints; update ARP if present
+    if(frame.srcIP) { node.arp = node.arp||{}; node.arp[frame.srcIP]=frame.srcMAC; updateTables(); }
+  }
+}
+
+/* ---------------------------
+   Sending frames from a node (higher-level): handles ARP resolution, VLAN tagging, path selection
+   - sendFrameFrom(nodeId, dstIP, ethType, payload, options)
+   - options: dstMAC (if known), vlan (if specified), srcPort (for NAT mapping), lossProb
+*/
+async function sendFrameFrom(srcId, dstIp, ethType, payload, options={}){
+  const src = state.nodes[srcId];
+  if(!src){ log('Origen inválido','err'); return; }
+  // If destination is same IP as source -> ignore
+  if(dstIp === src.ip){ log('Destino igual a origen','warn'); return; }
+
+  // Determine if same subnet => direct L2, else send to gateway
+  let targetIP = dstIp;
+  let nextHopIP = null;
+  if(sameSubnet(src.ip, src.mask, dstIp, state.nodes[srcId].mask || src.mask)){
+    nextHopIP = dstIp;
+  } else {
+    if(!src.gw){ log('No hay gateway configurado en origen','err'); return; }
+    nextHopIP = src.gw;
+  }
+
+  // ARP resolution on src: find MAC for nextHopIP
+  src.arp = src.arp||{};
+  if(!src.arp[nextHopIP]){
+    // send ARP request - broadcast on link connected to src
+    const linkId = findLinkForHost(srcId);
+    if(!linkId){ log('Origen sin enlace','err'); return; }
+    const br = state.links[linkId];
+    const vlan = getVlanOnLink(linkId, srcId);
+    const arpReq = { srcMAC: src.mac, dstMAC: 'ff:ff:ff:ff:ff:ff', ethType:'arp', vlan,
+                     payload: {op:'request', senderIP: src.ip, senderMAC: src.mac, targetIP: nextHopIP} };
+    // Broadcast on the link: deliver to other end, which will flood if switch or reply accordingly
+    deliverFrameOnLink(linkId, srcId, arpReq);
+    // We'll wait briefly for ARP reply
+    await sleep(120);
+    if(!src.arp[nextHopIP]){ log('ARP timeout: no se resolvió la MAC del próximo salto','err'); return; }
+  }
+
+  // Now build IP frame
+  const dstMAC = src.arp[nextHopIP];
+  const linkId = findLinkForHost(srcId);
+  const vlan = getVlanOnLink(linkId, srcId);
+  const frame = { srcMAC: src.mac, dstMAC, ethType: ethType, vlan, srcIP: src.ip, dstIP: targetIP, payload };
+  // If options include srcPort (for NAT display)
+  if(options.srcPort) frame.srcPort = options.srcPort;
+
+  // Animate and deliver frame along path (graph path)
+  // We'll compute path of nodes (IDs) using findPath between src and the node owning nextHopIP
+  const nextHopNodeId = findNodeByIP(nextHopIP);
+  if(!nextHopNodeId){ log('Próximo salto no existe en topología','err'); return; }
+  const path = findPath(srcId, nextHopNodeId);
+  if(!path){ log('No existe camino al próximo salto','err'); return; }
+  await animateFrameAlongPath(path, frame);
+  // After arriving at nextHop, deliver into that node's receive function
+  const finalLink = findLinkBetween(path[path.length-2], path[path.length-1]);
+  if(finalLink) deliverFrameToNode(path[path.length-1], finalLink.id, frame);
+}
+
+/* Deliver frame onto a specific link from a host: the link will deliver to the other end node (or switch and so on) */
+function deliverFrameOnLink(linkId, fromNodeId, frame){
+  const l = state.links[linkId]; if(!l || !l.enabled) { log('Enlace caído','err'); return; }
+  // If switch is at other end, deliver accordingly - deliverFrameToNode handles
+  const toNodeId = l.a===fromNodeId? l.b : l.a;
+  deliverFrameToNode(toNodeId, linkId, frame);
+}
+
+/* Helpers to find link connected to host (if multiple, pick first enabled) */
+function findLinkForHost(nodeId){
+  for(const [lid,l] of Object.entries(state.links)) if((l.a===nodeId||l.b===nodeId) && l.enabled) return lid;
+  return null;
+}
+function findNodeByIP(ip){
+  for(const [id,n] of Object.entries(state.nodes)) if(n.ip === ip) return id;
+  return null;
+}
+function findLinkBetween(a,b){
+  for(const l of Object.values(state.links)) if((l.a===a&&l.b===b)||(l.a===b&&l.b===a)) return l;
+  return null;
+}
+function getVlanOnLink(linkId, nodeId){
+  // If node is switch, use port vlan; else return 1
+  const l = state.links[linkId];
+  if(!l) return 1;
+  const other = state.nodes[nodeId];
+  if(other && other.type==='Switch'){
+    // If node is switch, get its port info for this link
+    const p = other.ports[linkId];
+    return p ? p.vlan : 1;
+  }
+  // else, find if other end is switch and port has VLAN
+  const otherNodeId = l.a===nodeId? l.b : l.a;
+  const otherNode = state.nodes[otherNodeId];
+  if(otherNode && otherNode.type==='Switch'){ const p = otherNode.ports[linkId]; return p ? p.vlan : 1; }
+  return 1;
+}
+
+/* ---------------------------
+   Packet animation along path (SVG)
+   - path: array of nodeIds
+   - frame: contains vlan etc used to style token
+*/
+function animateFrameAlongPath(path, frame){
+  return new Promise((resolve)=>{
+    state.animating = true;
+    // Build coordinates for centers
+    const coords = path.map(id => getCenter(state.nodes[id].el));
+    const token = document.createElementNS('http://www.w3.org/2000/svg','circle');
+    token.setAttribute('r',8);
+    token.setAttribute('fill','white');
+    token.setAttribute('opacity',0.95);
+    svg.appendChild(token);
+    // Label with VLAN if present
+    const label = document.createElementNS('http://www.w3.org/2000/svg','text');
+    label.setAttribute('font-size',12);
+    label.setAttribute('fill','#00e0ff');
+    label.textContent = frame.vlan ? `V${frame.vlan}` : '';
+    svg.appendChild(label);
+    let seg=0,t=0; const speed = 0.008 + Math.random()*0.01;
+    function step(){
+      if(seg >= coords.length-1){
+        svg.removeChild(token); svg.removeChild(label);
+        state.animating=false; resolve();
+        return;
+      }
+      const A=coords[seg], B=coords[seg+1];
+      const x = A.x + (B.x-A.x)*t, y = A.y + (B.y-A.y)*t;
+      token.setAttribute('cx', x); token.setAttribute('cy', y);
+      label.setAttribute('x', x+12); label.setAttribute('y', y-4);
+      t += speed;
+      if(t>=1){ seg++; t=0; }
+      requestAnimationFrame(step);
+    }
+    requestAnimationFrame(step);
+  });
+}
+
+/* ---------------------------
+   ICMP Ping (with RTT and loss)
+   - Performs ARP resolution, sends ICMP echo, waits reply with timeout
+*/
+let pingIdCounter = 1;
+async function ping(srcId, dstIp, attempts=4, timeout=1000){
+  const src = state.nodes[srcId];
+  if(!src){ log('Origen inválido','err'); return; }
+  log(`Ping: ${src.name} -> ${dstIp}`);
+  for(let i=0;i<attempts;i++){
+    const id = pingIdCounter++;
+    const seq = i+1;
+    const loss = Math.random() < 0.08; // base simulated loss 8%
+    const t0 = Date.now();
+    // send ICMP echo: use sendFrameFrom which handles ARP and path
+    // We'll listen for a synthetic reply by adding a small hook: when reply arrives to the source's linked node, it will learn ARP and we simulate RTT by tapping into animate promise
+    // For simplicity: send frame and wait for reply via a promise with timeout
+    const replyPromise = new Promise(async (resolve) => {
+      // register a temporary handler in the source node to catch echo-reply via ARP table or via a global monitor
+      const monitor = (frame, recvAtNodeId)=>{
+        if(frame.ethType==='icmp' && frame.payload && frame.payload.type==='echo-reply' && frame.payload.id===id && frame.dstIP===src.ip){
+          resolve({ok:true, rtt: Date.now()-t0});
+        }
+      };
+      TEMP_MONITORS.push(monitor);
+      // send echo: src -> dst
+      // Prepare payload
+      const payload = {type:'echo', id, seq};
+      // If loss simulated, do not send frame (simulate drop)
+      if(loss){ setTimeout(()=>{ /* nothing */ }, 50); }
+      else { await sendFrameFrom(srcId, dstIp, 'icmp', payload); }
+      // timeout
+      setTimeout(()=>resolve({ok:false}), timeout);
+    });
+    const res = await replyPromise;
+    // remove monitors
+    TEMP_MONITORS = [];
+    if(res.ok) log(`Reply from ${dstIp}: bytes=64 time=${res.rtt}ms seq=${seq}`);
+    else log(`Request timed out for seq ${seq}`, 'warn');
+    await sleep(200);
+  }
+}
+
+/* Global temporary monitors to capture frames traversing the system (for ping responses) */
+let TEMP_MONITORS = [];
+// Hook: wrap deliverFrameToNode to call monitors when a frame arrives at any node
+const originalDeliver = deliverFrameToNode;
+deliverFrameToNode = function(nodeId, incomingLinkId, frame){
+  // call monitors
+  for(const m of TEMP_MONITORS) try{ m(frame, nodeId); } catch(e){}
+  // proceed original
+  originalDeliver(nodeId, incomingLinkId, frame);
+}
+
+/* Utility sleep */
+function sleep(ms){ return new Promise(r=>setTimeout(r,ms)); }
+
+/* ---------------------------
+   NAT translation table UI
+*/
+function updateNatTransTable(){
+  natTransTableBody.innerHTML='';
+  for(const [rid, list] of Object.entries(state.natTranslations)){
+    const router = state.nodes[rid];
+    (list || []).forEach(entry=>{
+      const tr = document.createElement('tr');
+      tr.innerHTML = `<td>${router?router.name:rid}</td><td>${entry.insideIP}:${entry.insidePort}</td><td>${entry.outIP}:${entry.outPort}</td><td>${entry.type}</td>`;
+      natTransTableBody.appendChild(tr);
+    });
+  }
+}
+
+$('#btnShowNat').addEventListener('click', ()=>{ $('#modalNat').classList.add('show'); updateNatTransTable(); });
+$('#closeNat').addEventListener('click', ()=>{ $('#modalNat').classList.remove('show'); });
+
+/* ---------------------------
+   Simular envío aleatorio
+*/
+async function simulateRandomSend(){
+  const nodes = Object.values(state.nodes).filter(n=>n.ip);
+  if(nodes.length < 2){ log('Necesitas al menos 2 dispositivos con IP para simular envío','warn'); return; }
+  let a = nodes[Math.floor(Math.random()*nodes.length)];
+  let b = nodes[Math.floor(Math.random()*nodes.length)];
+  while(b.id === a.id) b = nodes[Math.floor(Math.random()*nodes.length)];
+  await sendFrameFrom(a.id, b.ip, 'ip', {dummy:true});
+  log(`Trama simulada: ${a.name} -> ${b.name}`);
+}
+$('#btnSim').addEventListener('click', simulateRandomSend);
+
+/* ---------------------------
+   Helper: find first link connecting node to network (for ARP broadcasts)
+*/
+function findLinkForHost(nodeId){
+  for(const [lid,l] of Object.entries(state.links)) if((l.a===nodeId||l.b===nodeId) && l.enabled) return lid;
+  return null;
+}
+
+/* ---------------------------
+   Global keyboard shortcuts
+*/
+window.addEventListener('keydown', e=>{
+  if(e.key==='1') setMode('add');
+  if(e.key==='2') setMode('connect');
+  if(e.key==='3') setMode('move');
+  if(e.key==='r') resetBoard();
+});
+
+/* ---------------------------
+   Ping button
+*/
+$('#btnPing').addEventListener('click', async ()=>{
+  // Ask for source and destination (simple prompt)
+  const srcName = prompt('Nombre del origen (ej: PC-A)'); if(!srcName) return;
+  const src = Object.values(state.nodes).find(n=>n.name===srcName);
+  if(!src){ alert('Origen no encontrado'); return; }
+  const dstIP = prompt('IP destino (ej: 10.0.0.20)'); if(!dstIP) return;
+  await ping(src.id, dstIP, 4, 1200);
+});
+
+/* ---------------------------
+   Start timer and initial scenario
+*/
+let startTime = Date.now();
+setInterval(()=>{ const s = Math.floor((Date.now()-startTime)/1000); $('#simTime').textContent = `${String(Math.floor(s/60)).padStart(2,'0')}:${String(s%60).padStart(2,'0')}`; }, 1000);
+
+(function initDefault(){ createRandomScenario(); })();
+
+/* Initial update loop */
+setInterval(updateTables, 800);
+
+</script>
+</body>
+</html>
